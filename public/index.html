@@ -1,0 +1,360 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Mapa compartido</title>
+<link rel="stylesheet" href="leaflet/leaflet.css">
+<style>
+:root{--ink:#17272b;--paper:#f6f8f7;--line:#cfd9d6;--accent:#0f766e;--warn:#b7791f;--bad:#b3362d}
+*{box-sizing:border-box}
+html,body{height:100%;margin:0;font:15px/1.35 system-ui,-apple-system,"Segoe UI",sans-serif;color:var(--ink)}
+#map{position:absolute;inset:0}
+.leaflet-top{top:env(safe-area-inset-top,0)}
+#panel{position:absolute;z-index:1000;left:8px;bottom:calc(8px + env(safe-area-inset-bottom));width:min(380px,calc(100% - 16px));max-height:42%;display:flex;flex-direction:column;background:var(--paper);border:1px solid var(--line);border-radius:10px;overflow:hidden}
+#panel header{display:flex;justify-content:space-between;align-items:center;gap:8px;padding:8px 10px;border-bottom:1px solid var(--line)}
+#list{list-style:none;margin:0;padding:0;overflow:auto}
+#list li{display:flex;justify-content:space-between;align-items:center;gap:8px;padding:6px 10px;border-bottom:1px solid var(--line);cursor:pointer}
+#list li:last-child{border-bottom:0}
+#list .who{display:flex;align-items:center;gap:8px;min-width:0}
+#list .sub{font-size:13px;text-align:right}
+button,.btn{font:inherit;border:1px solid var(--ink);background:var(--ink);color:#fff;border-radius:8px;padding:8px 12px;cursor:pointer;display:inline-block}
+button.ghost,.btn.ghost{background:transparent;color:var(--ink)}
+button:focus-visible,input:focus-visible,select:focus-visible,li:focus-visible{outline:3px solid var(--accent);outline-offset:2px}
+#join,#profileModal{position:absolute;inset:0;z-index:2000;display:grid;place-items:center;background:rgba(23,39,43,.55);padding:16px;overflow:auto}
+#join form,#profileModal form{background:var(--paper);border-radius:12px;padding:20px;width:min(360px,100%);display:grid;gap:12px}
+#join h1,#profileModal h1{font-size:1.2rem;margin:0}
+#join label,#profileModal label{display:grid;gap:4px}
+#join input[type=text],#join input:not([type]),#join select,#profileModal input[type=text],#profileModal input:not([type]){font:inherit;padding:10px;border:1px solid var(--ink);border-radius:8px;background:#fff}
+#join .view{background:none;border:0;color:var(--ink);text-decoration:underline;padding:4px}
+.photo{display:flex;align-items:center;gap:12px}
+#msg,#pmsg{color:var(--bad);min-height:1.2em;margin:0;font-size:.9rem}
+.av{width:44px;height:44px;flex:none;border-radius:50%;border:3px solid var(--c,#999);background:#999 center/cover no-repeat;display:grid;place-items:center;color:#fff;font-weight:700;box-shadow:0 1px 3px rgba(0,0,0,.3)}
+.av.sm{width:30px;height:30px;border-width:2px;font-size:13px;box-shadow:none}
+.pin-wrap{pointer-events:none}
+.pin{position:absolute;left:0;top:0;transform:translate(-50%,-22px);display:flex;flex-direction:column;align-items:center}
+.pin.stale{opacity:.5}
+.lb{margin-top:3px;background:var(--paper);border:1px solid var(--line);border-radius:6px;padding:2px 6px;font-size:12px;white-space:nowrap;text-align:center;line-height:1.25}
+.b{display:inline-block;width:3px;margin-right:1px;background:#c3ccc9;vertical-align:bottom}
+.b:nth-child(1){height:4px}.b:nth-child(2){height:7px}.b:nth-child(3){height:10px}.b:nth-child(4){height:13px}
+.b.on{background:var(--ink)}
+.low{color:var(--warn);font-weight:600}.crit{color:var(--bad);font-weight:600}
+.stale{opacity:.55}
+</style>
+</head>
+<body>
+<div id="map"></div>
+
+<div id="panel">
+  <header>
+    <strong id="count">0 personas</strong>
+    <span>
+      <button class="ghost" id="fit">Ver todos</button>
+      <button class="ghost" id="editProfile" hidden>Editar perfil</button>
+      <button id="shareBtn" hidden>Compartir ubicación</button>
+      <button id="stop" hidden>Dejar de compartir</button>
+    </span>
+  </header>
+  <ul id="list"></ul>
+</div>
+
+<div id="join">
+  <form id="form">
+    <h1>Compartir mi ubicación</h1>
+    <label id="srvRow" hidden>Servidor (wss://… o ws://IP:3000)
+      <input id="srv" placeholder="wss://mi-servidor.com" autocomplete="off" inputmode="url">
+    </label>
+    <label>Nombre que verán los demás
+      <input id="name" maxlength="24" required autocomplete="off">
+    </label>
+    <div class="photo">
+      <div id="prev" class="av"></div>
+      <label class="btn ghost">Elegir foto<input type="file" id="photo" accept="image/*" hidden></label>
+    </div>
+    <label>Consumo
+      <select id="mode">
+        <option value="eco">Ahorro de batería (recomendado)</option>
+        <option value="normal">Normal (más preciso)</option>
+      </select>
+    </label>
+    <button type="submit">Compartir ubicación</button>
+    <button type="button" class="view" id="onlyView">Solo ver el mapa</button>
+    <p id="msg" role="alert"></p>
+  </form>
+</div>
+
+<div id="profileModal" hidden>
+  <form id="profileForm">
+    <h1>Editar perfil</h1>
+    <label>Nombre que verán los demás
+      <input id="pname" maxlength="24" required autocomplete="off">
+    </label>
+    <div class="photo">
+      <div id="pprev" class="av"></div>
+      <label class="btn ghost">Elegir foto<input type="file" id="pphoto" accept="image/*" hidden></label>
+    </div>
+    <div style="display:flex;gap:8px;justify-content:flex-end">
+      <button type="button" class="btn ghost" id="profileCancel">Cancelar</button>
+      <button type="submit">Guardar</button>
+    </div>
+    <p id="pmsg" role="alert"></p>
+  </form>
+</div>
+
+<script src="leaflet/leaflet.js"></script>
+<script>
+const $ = s => document.querySelector(s);
+const esc = s => String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const hue = s => { let h = 0; for (const c of s) h = (h * 31 + c.charCodeAt(0)) % 360; return h; };
+const NATIVE = !!(window.Capacitor && Capacitor.isNativePlatform && Capacitor.isNativePlatform());
+const P = NATIVE ? Capacitor.Plugins : {};
+
+// Ahorro: menos envíos (solo si te moviste o cada cierto tiempo) y menos trabajo de GPS
+const MODES = { eco: { move: 30, beat: 90000 }, normal: { move: 10, beat: 30000 } };
+const STALE = 240000; // 4 min sin reportar = atenuado
+
+// Mapa: OpenStreetMap (cambiá TILE_URL por tu propio proveedor si el uso crece)
+const TILE_URL = 'https://tile.openstreetmap.org/{z}/{x}/{y}.png';
+const map = L.map('map', { zoomControl: false, fadeAnimation: false, markerZoomAnimation: false }).setView([9.75, -83.75], 8);
+L.control.zoom({ position: 'topright' }).addTo(map);
+L.tileLayer(TILE_URL, { maxZoom: 19, updateWhenIdle: true, keepBuffer: 1, attribution: '© OpenStreetMap' }).addTo(map);
+
+const people = new Map(), avs = new Map();
+const me = { id: localStorage.getItem('uid') || crypto.randomUUID(), name: localStorage.getItem('name') || '' };
+localStorage.setItem('uid', me.id);
+let mePos = null, sharing = false, avMine = localStorage.getItem('av') || '';
+let mode = localStorage.getItem('mode') || 'eco';
+
+const hav = (a, b, c, d) => { const r = Math.PI / 180, x = Math.sin((c - a) * r / 2) ** 2 + Math.cos(a * r) * Math.cos(c * r) * Math.sin((d - b) * r / 2) ** 2; return 12742000 * Math.asin(Math.sqrt(x)); };
+const fmt = m => m < 10 ? '<10 m' : m < 1000 ? Math.round(m / 5) * 5 + ' m' : (m / 1000).toFixed(1) + ' km';
+const distTo = u => (mePos && u.id !== me.id) ? hav(mePos.latitude, mePos.longitude, u.lat, u.lng) : null;
+
+const LEVELS = { '4g': 4, '3g': 3, '2g': 2, 'slow-2g': 1 };
+const LABELS = { wifi: 'Wi‑Fi', cell: 'Móvil', cellular: 'Móvil', none: 'Sin red' };
+function netHtml(u) {
+  if (!u.net) return '';
+  const n = u.sig != null ? u.sig : (u.net === 'wifi' ? 4 : LEVELS[u.net] || 0);
+  const bars = [1, 2, 3, 4].map(i => `<i class="b${i <= n ? ' on' : ''}"></i>`).join('');
+  return `<span title="Señal">${bars} ${esc(LABELS[u.net] || u.net.toUpperCase())}</span>`;
+}
+function batHtml(u) {
+  if (u.bat == null) return '<span>Batería N/D</span>';
+  const c = u.bat <= 15 ? 'crit' : u.bat <= 30 ? 'low' : '';
+  return `<span class="${c}">${u.bat}%${u.chg ? ' (cargando)' : ''}</span>`;
+}
+function avHtml(name, av, color, cls = 'av') {
+  return `<div class="${cls}" style="${av ? `background-image:url(${av})` : `background-color:${color}`}">${av ? '' : esc(name.trim().charAt(0).toUpperCase())}</div>`;
+}
+
+function render(p) {
+  const el = p.marker.getElement(); if (!el) return;
+  const u = p.u, d = distTo(u), stale = Date.now() - p.seen > STALE;
+  el.innerHTML = `<div class="pin${stale ? ' stale' : ''}" style="--c:${p.color}">${avHtml(u.name, avs.get(u.id), p.color)}
+    <div class="lb"><b>${esc(u.name)}${u.id === me.id ? ' (vos)' : ''}</b><br>${batHtml(u)} ${netHtml(u)}${d != null ? ' · ' + fmt(d) : ''}</div></div>`;
+}
+function upsert(u, age) {
+  let p = people.get(u.id);
+  if (!p) {
+    const color = `hsl(${hue(u.name)} 65% 38%)`;
+    const marker = L.marker([u.lat, u.lng], { icon: L.divIcon({ className: 'pin-wrap', html: '', iconSize: [0, 0] }), keyboard: false, interactive: false, zIndexOffset: u.id === me.id ? 1000 : 0 }).addTo(map);
+    p = { marker, color };
+    people.set(u.id, p);
+  }
+  p.u = u; p.seen = Date.now() - age;
+  p.marker.setLatLng([u.lat, u.lng]);
+  if (!document.hidden) render(p);
+}
+function remove(id) { const p = people.get(id); if (p) { p.marker.remove(); people.delete(id); } }
+
+let rt = null;
+function schedule() { if (rt || document.hidden) return; rt = setTimeout(() => { rt = null; refresh(); }, 300); }
+function refresh() {
+  const rows = [...people.values()];
+  rows.forEach(render);
+  rows.sort((a, b) => { const x = distTo(a.u), y = distTo(b.u); return (x ?? 1e12) - (y ?? 1e12) || a.u.name.localeCompare(b.u.name); });
+  $('#count').textContent = rows.length + (rows.length === 1 ? ' persona' : ' personas');
+  $('#list').innerHTML = rows.map(p => {
+    const age = Date.now() - p.seen, stale = age > STALE, d = distTo(p.u);
+    return `<li tabindex="0" data-id="${esc(p.u.id)}" class="${stale ? 'stale' : ''}" style="--c:${p.color}">
+      <span class="who">${avHtml(p.u.name, avs.get(p.u.id), p.color, 'av sm')}<span>${esc(p.u.name)}${stale ? ` · hace ${Math.round(age / 60000)} min` : ''}</span></span>
+      <span class="sub">${batHtml(p.u)} ${netHtml(p.u)}${d != null ? '<br>' + fmt(d) : ''}</span></li>`;
+  }).join('');
+}
+$('#list').addEventListener('click', e => {
+  const li = e.target.closest('li'); const p = li && people.get(li.dataset.id);
+  if (p) map.flyTo([p.u.lat, p.u.lng], Math.max(map.getZoom(), 16));
+});
+$('#fit').onclick = () => {
+  const pts = [...people.values()].map(p => [p.u.lat, p.u.lng]);
+  if (pts.length) map.fitBounds(pts, { padding: [60, 60], maxZoom: 17 });
+};
+setInterval(() => { if (!document.hidden) refresh(); }, 30000);
+
+// Conexión
+let ws, retry = 1000, srv = localStorage.getItem('server') || '';
+const wsend = o => { if (ws && ws.readyState === 1) ws.send(JSON.stringify(o)); };
+function wsUrl() {
+  if (!NATIVE) return (location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host;
+  if (!srv) return null;
+  if (/^https?:\/\//.test(srv)) return srv.replace(/^http/, 'ws');
+  return /^wss?:\/\//.test(srv) ? srv : 'wss://' + srv;
+}
+function connect() {
+  const url = wsUrl(); if (!url) return;
+  ws = new WebSocket(url);
+  ws.onopen = () => { retry = 1000; if (document.hidden) wsend({ t: 'vis', v: false }); if (sharing) { sendProf(); push(); } };
+  ws.onmessage = e => {
+    const m = JSON.parse(e.data);
+    if (m.t === 'snap') {
+      const ids = new Set(m.users.map(u => u.id));
+      people.forEach((_, id) => { if (!ids.has(id)) remove(id); });
+      m.users.forEach(u => { if (u.av) avs.set(u.id, u.av); upsert(u, u.age); });
+    }
+    if (m.t === 'u') upsert(m.u, 0);
+    if (m.t === 'p') { avs.set(m.id, m.av); const p = people.get(m.id); if (p && !document.hidden) render(p); }
+    if (m.t === 'x') remove(m.id);
+    schedule();
+  };
+  ws.onclose = () => { setTimeout(connect, retry); retry = Math.min(retry * 2, 30000); };
+}
+connect();
+// Si la app no está visible, el servidor deja de enviarte datos (ahorra radio y CPU)
+document.addEventListener('visibilitychange', () => { wsend({ t: 'vis', v: !document.hidden }); if (!document.hidden) refresh(); });
+
+// Perfil: foto reducida a 96x96 JPEG (~4 KB), se envía una sola vez
+const setPrev = () => {
+  const c = `hsl(${hue(me.name || 'x')} 65% 38%)`;
+  $('#prev').style.cssText = avMine ? `background-image:url(${avMine})` : `background-color:${c}`;
+  $('#prev').textContent = avMine ? '' : (me.name || '?').trim().charAt(0).toUpperCase();
+};
+function resizePhoto(file) {
+  return new Promise((ok, bad) => {
+    const img = new Image();
+    img.onload = () => {
+      const s = 96, c = document.createElement('canvas'); c.width = c.height = s;
+      const m = Math.min(img.width, img.height);
+      c.getContext('2d').drawImage(img, (img.width - m) / 2, (img.height - m) / 2, m, m, 0, 0, s, s);
+      URL.revokeObjectURL(img.src); ok(c.toDataURL('image/jpeg', 0.7));
+    };
+    img.onerror = bad; img.src = URL.createObjectURL(file);
+  });
+}
+$('#photo').onchange = async e => {
+  const f = e.target.files[0]; if (!f) return;
+  try { avMine = await resizePhoto(f); localStorage.setItem('av', avMine); setPrev(); } catch { $('#msg').textContent = 'No se pudo leer la foto.'; }
+};
+const sendProf = () => { if (avMine) wsend({ t: 'prof', id: me.id, av: avMine }); };
+
+// Editar perfil (nombre/foto) sin dejar de compartir
+let pAvTemp = '';
+function setPPrev() {
+  const n = $('#pname').value || me.name || 'x';
+  const c = `hsl(${hue(n)} 65% 38%)`;
+  $('#pprev').style.cssText = pAvTemp ? `background-image:url(${pAvTemp})` : `background-color:${c}`;
+  $('#pprev').textContent = pAvTemp ? '' : n.trim().charAt(0).toUpperCase();
+}
+$('#editProfile').onclick = () => {
+  $('#pname').value = me.name; pAvTemp = avMine; $('#pmsg').textContent = '';
+  setPPrev(); $('#profileModal').hidden = false;
+};
+$('#profileCancel').onclick = () => { $('#profileModal').hidden = true; };
+$('#pname').oninput = setPPrev;
+$('#pphoto').onchange = async e => {
+  const f = e.target.files[0]; if (!f) return;
+  try { pAvTemp = await resizePhoto(f); setPPrev(); } catch { $('#pmsg').textContent = 'No se pudo leer la foto.'; }
+};
+$('#profileForm').onsubmit = e => {
+  e.preventDefault();
+  const n = $('#pname').value.trim(); if (!n) return;
+  me.name = n; localStorage.setItem('name', me.name);
+  if (pAvTemp !== avMine) { avMine = pAvTemp; localStorage.setItem('av', avMine); }
+  setPrev(); $('#name').value = me.name;
+  $('#profileModal').hidden = true;
+  if (sharing) { sendProf(); push(); }
+};
+
+// Compartir
+$('#name').value = me.name; $('#mode').value = mode;
+$('#srvRow').hidden = !NATIVE; $('#srv').required = NATIVE; $('#srv').value = srv;
+setPrev();
+let watchId = null, last = null, lastSent = null, beat = null;
+
+async function status() {
+  const s = { bat: null, chg: false, net: null, sig: null };
+  if (NATIVE) {
+    try { const b = await P.Device.getBatteryInfo(); if (b.batteryLevel != null) s.bat = b.batteryLevel * 100; s.chg = !!b.isCharging; } catch {}
+    try { const g = await P.Signal.get(); s.net = g.type; s.sig = g.level >= 0 ? g.level : null; }
+    catch { try { s.net = (await P.Network.getStatus()).connectionType; } catch {} }
+  } else {
+    try { const b = await navigator.getBattery?.(); if (b) { s.bat = b.level * 100; s.chg = b.charging; } } catch {}
+    const c = navigator.connection;
+    if (c) s.net = c.type === 'wifi' ? 'wifi' : (c.effectiveType || null);
+  }
+  return s;
+}
+async function push() {
+  if (!last || !ws || ws.readyState !== 1) return;
+  lastSent = { t: Date.now(), la: last.latitude, lo: last.longitude };
+  const s = await status();
+  wsend({ t: 'pos', id: me.id, name: me.name, lat: last.latitude, lng: last.longitude, acc: last.accuracy, ...s });
+}
+function onLoc(c) {
+  last = c; mePos = c;
+  const M = MODES[mode];
+  const moved = lastSent ? hav(lastSent.la, lastSent.lo, c.latitude, c.longitude) : Infinity;
+  if (moved >= M.move || !lastSent || Date.now() - lastSent.t >= M.beat) push();
+  schedule();
+}
+function fail(m) { stopSharing(false); $('#join').hidden = false; $('#msg').textContent = m; }
+async function startSharing() {
+  sharing = true; lastSent = null;
+  try {
+    if (NATIVE) {
+      watchId = await P.BackgroundGeolocation.addWatcher(
+        { backgroundTitle: 'Compartiendo ubicación', backgroundMessage: 'Tu ubicación es visible para el grupo.', requestPermissions: true, stale: false, distanceFilter: MODES[mode].move },
+        (loc, err) => {
+          if (err) return fail(err.code === 'NOT_AUTHORIZED' ? 'Permiso de ubicación denegado. Habilitalo en Ajustes del teléfono.' : 'No se pudo obtener la ubicación.');
+          onLoc(loc);
+        });
+    } else {
+      if (!navigator.geolocation) return fail('Este navegador no tiene geolocalización.');
+      watchId = navigator.geolocation.watchPosition(p => onLoc(p.coords),
+        err => fail(err.code === 1 ? 'Permiso de ubicación denegado. Habilitalo en el navegador.' : 'No se pudo obtener la ubicación.'),
+        { enableHighAccuracy: mode === 'normal', maximumAge: mode === 'normal' ? 5000 : 30000, timeout: 30000 });
+      navigator.wakeLock?.request('screen').catch(() => {});
+    }
+  } catch { return fail('No se pudo iniciar la ubicación.'); }
+  sendProf();
+  beat = setInterval(push, MODES[mode].beat); // refresca batería y señal aunque estés quieto
+  $('#stop').hidden = false; $('#editProfile').hidden = false; $('#shareBtn').hidden = true; $('#join').hidden = true;
+}
+function stopSharing(notify = true) {
+  sharing = false;
+  if (watchId != null) { if (NATIVE) P.BackgroundGeolocation.removeWatcher({ id: watchId }); else navigator.geolocation.clearWatch(watchId); }
+  clearInterval(beat); watchId = null; last = null; lastSent = null; mePos = null;
+  if (notify) wsend({ t: 'bye', id: me.id });
+  $('#stop').hidden = true; $('#editProfile').hidden = true; $('#profileModal').hidden = true;
+}
+function applyServer() {
+  if (!NATIVE) return true;
+  const v = $('#srv').value.trim();
+  if (!v) { $('#msg').textContent = 'Escribí la dirección del servidor.'; return false; }
+  if (v !== srv) { srv = v; localStorage.setItem('server', v); if (ws) { ws.onclose = null; ws.close(); } connect(); }
+  return true;
+}
+$('#name').oninput = e => { me.name = e.target.value; if (!avMine) setPrev(); };
+$('#form').onsubmit = e => {
+  e.preventDefault();
+  if (!applyServer()) return;
+  me.name = $('#name').value.trim(); if (!me.name) return;
+  mode = $('#mode').value;
+  localStorage.setItem('name', me.name); localStorage.setItem('mode', mode);
+  $('#msg').textContent = '';
+  startSharing();
+};
+$('#onlyView').onclick = () => { if (applyServer()) { $('#join').hidden = true; $('#shareBtn').hidden = false; } };
+$('#shareBtn').onclick = () => { $('#msg').textContent = ''; $('#join').hidden = false; };
+$('#stop').onclick = () => { stopSharing(); $('#join').hidden = false; };
+</script>
+</body>
+</html>
